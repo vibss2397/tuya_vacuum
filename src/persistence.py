@@ -6,13 +6,13 @@ Handles serialization and deserialization of world maps and configuration.
 
 import json
 from typing import Tuple, Dict, Any
-from src.cell import WorldMap, Cell
+from src.room import WorldMap, Room, Point
 from src.constants import CalibrationConfig
 
 
 def serialize_map(world_map: WorldMap, config: CalibrationConfig) -> str:
     """
-    Serialize a WorldMap and CalibrationConfig to JSON string.
+    Serialize a WorldMap and CalibrationConfig to JSON string (v2.0 format).
 
     Args:
         world_map: The WorldMap to serialize
@@ -21,25 +21,44 @@ def serialize_map(world_map: WorldMap, config: CalibrationConfig) -> str:
     Returns:
         JSON string representation of the map and configuration
     """
-    # Build cells data structure
-    cells_data = []
-    for cell in world_map.get_all_cells():
-        cells_data.append({
-            "x": cell.x,
-            "y": cell.y,
-            "room_name": cell.room_name
-        })
+    # Build rooms data structure
+    rooms_data = []
+    for room in world_map.get_all_rooms():
+        polygons_data = [
+            [{"x_cm": p.x_cm, "y_cm": p.y_cm} for p in polygon]
+            for polygon in room.polygons
+        ]
+
+        # Serialize edge aliases as list of {polygon_idx, edge_idx, alias}
+        edge_aliases_data = [
+            {
+                "polygon_idx": poly_idx,
+                "edge_idx": edge_idx,
+                "alias": alias
+            }
+            for (poly_idx, edge_idx), alias in room.edge_aliases.items()
+        ]
+
+        room_data = {
+            "name": room.name,
+            "polygons": polygons_data
+        }
+
+        # Only include edge_aliases if there are any
+        if edge_aliases_data:
+            room_data["edge_aliases"] = edge_aliases_data
+
+        rooms_data.append(room_data)
 
     # Build complete data structure
     data = {
-        "version": "1.0",
+        "version": "2.0",
         "config": {
             "speed_cm_per_sec": config.speed_cm_per_sec,
             "turn_rate_deg_per_sec": config.turn_rate_deg_per_sec,
             "cell_size_cm": config.cell_size_cm
         },
-        "cells": cells_data,
-        "rooms": world_map.get_room_names()
+        "rooms": rooms_data
     }
 
     return json.dumps(data, indent=2)
@@ -48,6 +67,7 @@ def serialize_map(world_map: WorldMap, config: CalibrationConfig) -> str:
 def deserialize_map(json_string: str) -> Tuple[WorldMap, CalibrationConfig]:
     """
     Deserialize a WorldMap and CalibrationConfig from JSON string.
+    Supports both v1.0 (cell-based) and v2.0 (cm-based) formats.
 
     Args:
         json_string: JSON string to deserialize
@@ -66,8 +86,6 @@ def deserialize_map(json_string: str) -> Tuple[WorldMap, CalibrationConfig]:
     # Validate required fields
     if "config" not in data:
         raise ValueError("Missing 'config' field in JSON")
-    if "cells" not in data:
-        raise ValueError("Missing 'cells' field in JSON")
 
     # Reconstruct CalibrationConfig
     config_data = data["config"]
@@ -77,14 +95,45 @@ def deserialize_map(json_string: str) -> Tuple[WorldMap, CalibrationConfig]:
         cell_size_cm=config_data.get("cell_size_cm", 30.0)
     )
 
-    # Reconstruct WorldMap
+    # Reconstruct WorldMap based on version
     world_map = WorldMap()
-    for cell_data in data["cells"]:
-        world_map.set_cell(
-            x=cell_data["x"],
-            y=cell_data["y"],
-            room_name=cell_data.get("room_name")
+    version = data.get("version", "1.0")
+
+    if version == "2.0":
+        # New format: rooms with polygons in cm
+        if "rooms" not in data:
+            raise ValueError("Missing 'rooms' field in v2.0 JSON")
+
+        for room_data in data["rooms"]:
+            polygons = [
+                [Point(p["x_cm"], p["y_cm"]) for p in polygon_data]
+                for polygon_data in room_data["polygons"]
+            ]
+
+            # Deserialize edge aliases if present
+            edge_aliases = {}
+            if "edge_aliases" in room_data:
+                for alias_data in room_data["edge_aliases"]:
+                    key = (alias_data["polygon_idx"], alias_data["edge_idx"])
+                    edge_aliases[key] = alias_data["alias"]
+
+            room = Room(
+                name=room_data["name"],
+                polygons=polygons,
+                edge_aliases=edge_aliases
+            )
+            world_map.add_room(room)
+
+    elif version == "1.0":
+        # Old format: cells and waypoints
+        # For now, raise an error - migration can be added later if needed
+        raise ValueError(
+            "v1.0 format (cell-based) is no longer supported. "
+            "Please remap rooms using v2.0 format (cm-based)."
         )
+
+    else:
+        raise ValueError(f"Unsupported version: {version}")
 
     return world_map, config
 

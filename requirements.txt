@@ -1,0 +1,13 @@
+# Smart Vacuum Mapper - Python Dependencies
+
+# For keyboard input handling in main.py
+pynput>=1.7.6
+
+# For terminal UI (TUI) framework
+textual>=0.85.0
+
+# For testing
+pytest>=7.0.0
+
+tinytuya>=1.17.4
+PyYAML>=6.0

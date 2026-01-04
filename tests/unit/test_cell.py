@@ -11,11 +11,11 @@ class TestCell(unittest.TestCase):
 
     def test_cell_creation_with_room(self):
         """Test creating a cell with room assignment"""
-        cell = Cell(x=5, y=10, room_name="living_room")
+        cell = Cell(x=5, y=10, room_names={"living_room"})
 
         self.assertEqual(cell.x, 5)
         self.assertEqual(cell.y, 10)
-        self.assertEqual(cell.room_name, "living_room")
+        self.assertIn("living_room", cell.room_names)
 
     def test_cell_creation_without_room(self):
         """Test creating a cell without room assignment"""
@@ -23,7 +23,7 @@ class TestCell(unittest.TestCase):
 
         self.assertEqual(cell.x, 3)
         self.assertEqual(cell.y, 7)
-        self.assertIsNone(cell.room_name)
+        self.assertEqual(len(cell.room_names), 0)
 
 
 class TestWorldMap(unittest.TestCase):
@@ -42,7 +42,7 @@ class TestWorldMap(unittest.TestCase):
         self.assertIsNotNone(retrieved)
         self.assertEqual(retrieved.x, 0)
         self.assertEqual(retrieved.y, 0)
-        self.assertEqual(retrieved.room_name, "bedroom")
+        self.assertIn("bedroom", retrieved.room_names)
 
     def test_get_nonexistent_cell_returns_none(self):
         """Test retrieving a cell that doesn't exist returns None"""
@@ -80,7 +80,7 @@ class TestWorldMap(unittest.TestCase):
 
         self.assertEqual(len(bedroom_cells), 3)
         for cell in bedroom_cells:
-            self.assertEqual(cell.room_name, "bedroom")
+            self.assertIn("bedroom", cell.room_names)
 
     def test_get_all_cells(self):
         """Test getting all cells from map"""
@@ -113,6 +113,30 @@ class TestWorldMap(unittest.TestCase):
         self.assertIn("kitchen", room_names)
         self.assertIn("bathroom", room_names)
         self.assertEqual(room_names, sorted(room_names))
+
+    def test_shared_boundary_cells(self):
+        """Test that cells can belong to multiple rooms (shared boundaries)"""
+        world_map = WorldMap()
+
+        # Add a cell to room1
+        world_map.set_cell(5, 5, "room1")
+
+        # Add the same cell to room2 (shared boundary)
+        world_map.set_cell(5, 5, "room2")
+
+        # Retrieve the cell
+        cell = world_map.get_cell(5, 5)
+
+        # Cell should belong to both rooms
+        self.assertEqual(len(cell.room_names), 2)
+        self.assertIn("room1", cell.room_names)
+        self.assertIn("room2", cell.room_names)
+
+        # Both room queries should return this cell
+        room1_cells = world_map.get_all_cells_for_room("room1")
+        room2_cells = world_map.get_all_cells_for_room("room2")
+        self.assertIn(cell, room1_cells)
+        self.assertIn(cell, room2_cells)
 
 
 if __name__ == "__main__":

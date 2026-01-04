@@ -9,6 +9,7 @@ import tempfile
 from src.persistence import serialize_map, deserialize_map, save_to_file, load_from_file
 from src.cell import WorldMap
 from src.constants import CalibrationConfig
+from src.waypoint import Waypoint
 
 
 class TestSerialization(unittest.TestCase):
@@ -58,8 +59,8 @@ class TestSerialization(unittest.TestCase):
         for cell in data["cells"]:
             self.assertIn("x", cell)
             self.assertIn("y", cell)
-            self.assertIn("room_name", cell)
-            self.assertEqual(cell["room_name"], "kitchen")
+            self.assertIn("room_names", cell)
+            self.assertIn("kitchen", cell["room_names"])
 
     def test_serialize_map_with_multiple_rooms(self):
         """Test serializing a map with multiple rooms"""
@@ -243,8 +244,8 @@ class TestRoundTrip(unittest.TestCase):
         restored_map, restored_config = deserialize_map(json_string)
 
         # Verify maps are identical
-        original_cells = set((c.x, c.y, c.room_name) for c in original_map.get_all_cells())
-        restored_cells = set((c.x, c.y, c.room_name) for c in restored_map.get_all_cells())
+        original_cells = set((c.x, c.y, frozenset(c.room_names)) for c in original_map.get_all_cells())
+        restored_cells = set((c.x, c.y, frozenset(c.room_names)) for c in restored_map.get_all_cells())
         self.assertEqual(original_cells, restored_cells)
 
         # Verify configs are identical
@@ -341,6 +342,134 @@ class TestFileOperations(unittest.TestCase):
         self.assertTrue(loaded_map.cell_exists(0, 0))
         self.assertTrue(loaded_map.cell_exists(1, 1))
         self.assertEqual(loaded_config.speed_cm_per_sec, 15.0)
+
+
+class TestWaypointPersistence(unittest.TestCase):
+    """Test cases for waypoint serialization and deserialization"""
+
+    def setUp(self):
+        """Set up test fixtures"""
+        self.world_map = WorldMap()
+        self.config = CalibrationConfig()
+
+    def test_serialize_map_with_waypoints(self):
+        """Test serializing a map with waypoints"""
+        # Add cells
+        self.world_map.set_cell(0, 0, "kitchen")
+        self.world_map.set_cell(1, 0, "kitchen")
+
+        # Add waypoints
+        waypoints = [
+            Waypoint(x_cm=15.5, y_cm=20.3, orientation="NORTH"),
+            Waypoint(x_cm=25.1, y_cm=20.3, orientation="EAST"),
+            Waypoint(x_cm=25.1, y_cm=30.7, orientation="SOUTH")
+        ]
+        self.world_map.set_room_waypoints("kitchen", waypoints)
+
+        json_string = serialize_map(self.world_map, self.config)
+        data = json.loads(json_string)
+
+        # Verify waypoints field exists
+        self.assertIn("waypoints", data)
+        self.assertIn("kitchen", data["waypoints"])
+        self.assertEqual(len(data["waypoints"]["kitchen"]), 3)
+
+        # Verify waypoint data
+        wp_data = data["waypoints"]["kitchen"][0]
+        self.assertEqual(wp_data["x_cm"], 15.5)
+        self.assertEqual(wp_data["y_cm"], 20.3)
+        self.assertEqual(wp_data["orientation"], "NORTH")
+
+    def test_deserialize_map_with_waypoints(self):
+        """Test deserializing a map with waypoints"""
+        json_data = {
+            "version": "1.0",
+            "config": {
+                "speed_cm_per_sec": 10.0,
+                "turn_rate_deg_per_sec": 90.0,
+                "cell_size_cm": 30.0
+            },
+            "cells": [
+                {"x": 0, "y": 0, "room_names": ["bedroom"]}
+            ],
+            "rooms": ["bedroom"],
+            "waypoints": {
+                "bedroom": [
+                    {"x_cm": 10.5, "y_cm": 15.3, "orientation": "NORTH", "timestamp": None},
+                    {"x_cm": 20.2, "y_cm": 15.3, "orientation": "EAST", "timestamp": 1.5}
+                ]
+            }
+        }
+
+        json_string = json.dumps(json_data)
+        world_map, config = deserialize_map(json_string)
+
+        # Verify waypoints were loaded
+        waypoints = world_map.get_room_waypoints("bedroom")
+        self.assertEqual(len(waypoints), 2)
+
+        # Verify first waypoint
+        self.assertEqual(waypoints[0].x_cm, 10.5)
+        self.assertEqual(waypoints[0].y_cm, 15.3)
+        self.assertEqual(waypoints[0].orientation, "NORTH")
+        self.assertIsNone(waypoints[0].timestamp)
+
+        # Verify second waypoint
+        self.assertEqual(waypoints[1].x_cm, 20.2)
+        self.assertEqual(waypoints[1].timestamp, 1.5)
+
+    def test_backward_compatibility_without_waypoints(self):
+        """Test that old saves without waypoints still work"""
+        json_data = {
+            "version": "1.0",
+            "config": {
+                "speed_cm_per_sec": 10.0,
+                "turn_rate_deg_per_sec": 90.0,
+                "cell_size_cm": 30.0
+            },
+            "cells": [
+                {"x": 0, "y": 0, "room_names": ["kitchen"]}
+            ],
+            "rooms": ["kitchen"]
+            # No waypoints field
+        }
+
+        json_string = json.dumps(json_data)
+        world_map, config = deserialize_map(json_string)
+
+        # Should load successfully
+        self.assertEqual(len(world_map.get_all_cells()), 1)
+
+        # Waypoints should be empty
+        waypoints = world_map.get_room_waypoints("kitchen")
+        self.assertEqual(len(waypoints), 0)
+
+    def test_waypoint_round_trip(self):
+        """Test that waypoints survive serialize-deserialize round trip"""
+        # Create map with waypoints
+        original_map = WorldMap()
+        original_map.set_cell(0, 0, "room1")
+
+        original_waypoints = [
+            Waypoint(x_cm=5.5, y_cm=10.2, orientation="NORTH", timestamp=1.0),
+            Waypoint(x_cm=15.7, y_cm=10.2, orientation="EAST", timestamp=2.5),
+            Waypoint(x_cm=15.7, y_cm=25.9, orientation="SOUTH", timestamp=None)
+        ]
+        original_map.set_room_waypoints("room1", original_waypoints)
+
+        # Serialize then deserialize
+        json_string = serialize_map(original_map, self.config)
+        restored_map, _ = deserialize_map(json_string)
+
+        # Verify waypoints preserved
+        restored_waypoints = restored_map.get_room_waypoints("room1")
+        self.assertEqual(len(restored_waypoints), 3)
+
+        for original, restored in zip(original_waypoints, restored_waypoints):
+            self.assertEqual(original.x_cm, restored.x_cm)
+            self.assertEqual(original.y_cm, restored.y_cm)
+            self.assertEqual(original.orientation, restored.orientation)
+            self.assertEqual(original.timestamp, restored.timestamp)
 
 
 if __name__ == "__main__":
